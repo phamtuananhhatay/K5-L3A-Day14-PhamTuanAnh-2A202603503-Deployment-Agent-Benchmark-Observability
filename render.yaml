@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: day14-agent-phamtuananh
+    runtime: docker
+    plan: free
+    rootDir: 06-lab-complete
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "10"
+      - key: DAILY_BUDGET_USD
+        value: "1.0"
+      - key: MONTHLY_BUDGET_USD
+        value: "10.0"
+      - key: AGENT_API_KEY
+        generateValue: true
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: day14-redis-phamtuananh
+          property: connectionString
+
+  - type: keyvalue
+    name: day14-redis-phamtuananh
+    plan: free
+    ipAllowList: []
