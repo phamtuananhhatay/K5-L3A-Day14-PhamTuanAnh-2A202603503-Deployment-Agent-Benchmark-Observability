@@ -300,13 +300,23 @@ Qua đối chiếu `01-localhost-vs-production/develop/app.py` với nguyên lý
 
 ## Part 3: Cloud Deployment
 
-### Exercise 3.1: Triển khai Agent Part 6 (`06-lab-complete/`) lên Cloud
+### Exercise 3.1 & 3.2 (Deploy): Triển khai Agent Part 6 (`06-lab-complete/`) lên Render Cloud
 
-- **Public URL:** *(Đang chờ kết nối tài khoản Railway / Render để cập nhật URL thực tế)*
-- **Screenshots minh chứng:**
-  - Dashboard & Environment Variables: `screenshots/dashboard.png`
-  - Trạng thái Running & Logs: `screenshots/running.png`
-  - Kết quả kiểm thử 4 lệnh `curl` (`200 / 200 / 401 / 200`): `screenshots/test.png`
+- **Nền tảng triển khai:** **Render** (Docker Web Service `day14-agent-phamtuananh` + Render Key Value / Redis `day14-redis-phamtuananh` triển khai tự động qua Blueprint `render.yaml`, gói Free).
+- **Public URL đang hoạt động:** https://day14-agent-phamtuananh.onrender.com
+- **Kết quả chạy 4 lệnh tự kiểm tra CP6 (không lộ API key):**
+  ```text
+  GET  https://day14-agent-phamtuananh.onrender.com/health            -> 200  {"status":"ok","uptime_seconds":43.1,"environment":"production"}
+  GET  https://day14-agent-phamtuananh.onrender.com/ready             -> 200  {"status":"ready","redis":"connected"}
+  POST https://day14-agent-phamtuananh.onrender.com/ask (no key)      -> 401  {"detail":"Invalid or missing API key"}
+  POST https://day14-agent-phamtuananh.onrender.com/ask (valid key)   -> 200  {"question":"Hello","answer":"Đây là câu trả lời từ AI agent (mock). Trong production, đây sẽ là response từ OpenAI/Anthropic.","user_id":null,"cost_usd":2.07e-05}
+  ```
+- **Kiểm chứng bằng `check_production_ready.py --public-url`:**
+  `✅ Public URL: GET https://day14-agent-phamtuananh.onrender.com/health → 200`
+- **Screenshots minh chứng trong repo:**
+  - Dashboard & Environment Variables (đã che secret): [screenshots/dashboard.png](screenshots/dashboard.png)
+  - Trạng thái Live & Structured JSON Logs: [screenshots/running.png](screenshots/running.png)
+  - Kết quả kiểm thử 4 lệnh `curl` (`200 / 200 / 401 / 200`): [screenshots/test.png](screenshots/test.png)
 
 ---
 
@@ -758,3 +768,5 @@ Trong quá trình làm lab, mình sử dụng AI (Antigravity / Gemini) để tr
 | **Part 4 (CP3)** | Hỏi chiến lược rotate API key zero-downtime trong thực tế và mẫu thiết kế Cost Guard dùng Redis cho môi trường nhiều instance. | Gợi ý mô hình *dual-key* trong giai đoạn chuyển giao và dùng `INCRBYFLOAT` + `EXPIRE` gắn theo key ngày/tháng trên Redis, kèm so sánh vai trò của Rate Limit vs Cost Guard. | Đối chiếu lại code thật trong `04-api-gateway/production/`: phát hiện endpoint thực tế là `POST /auth/token` với user `student` / `demo123` (`10 req/phút`) chứ không phải `/token` như mẫu chung. Chạy vòng lặp 15 request bắt đúng `429` ở request `#11`, kiểm tra `/me/usage` thấy chỉ 10 request hợp lệ bị tính phí, và lọc che toàn bộ chuỗi JWT thành `<REDACTED_JWT>` trước khi đưa vào bài. |
 | **Part 5 (CP4)** | Hỏi kỹ lý do `/health` không nên kiểm tra kết nối Redis (tránh crash-loop) và cách kiểm chứng thực tế graceful shutdown khi nhận `SIGTERM`. | Phân tích cơ chế orchestrator xử lý Liveness vs Load Balancer xử lý Readiness, gợi ý bắn `POST /ask` chạy nền rồi gửi ngay `kill -SIGTERM <PID>` để quan sát thứ tự log. | Chạy thực nghiệm trên WSL2 xác nhận request đang bay vẫn trả `200 OK` trước khi `lifespan` đóng tiến trình. Ở phần Compose cổng `8080` (`POST /chat`), dùng `-p k5-day14-scaling` tránh dùng nhầm image của Part 2, chạy `test_stateless.py` thấy cả 3 container cùng phục vụ 1 `session_id` giữ đủ 10 tin nhắn trên Redis, đồng thời thử `docker stop` 1 container để xác nhận Nginx tự failover sang instance còn sống. |
 | **Part 6 (CP5)** | Nhờ gợi ý cấu trúc code cho `06-lab-complete/` theo bảng Hợp đồng, đặc biệt là: (1) Sliding Window bằng Redis Sorted Set, (2) đăng ký `SIGTERM` mà không làm kẹt Uvicorn `--workers 2`, và (3) viết `CMD` trong `Dockerfile` vừa nhận biến `PORT` vừa giữ Uvicorn làm PID 1. | Đề xuất khung `ZREMRANGEBYSCORE` + `ZCARD` + `ZADD` (member gắn `timestamp:uuid` để không đè nhau trong cùng mili-giây), lưu `prev_sigterm = signal.getsignal(signal.SIGTERM)` rồi gọi nối tiếp trong handler, và dùng `CMD ["sh", "-c", "exec python -m uvicorn ... --port ${PORT:-8000}"]`. | Tự rà soát kỹ từng điều kiện trong `check_production_ready.py`: đảm bảo `redis_client.py` khởi tạo pool lười (không `ping()` lúc import để container chạy độc lập vẫn qua được `/health` `200`, còn `/ready` đặt `socket_connect_timeout=1.0` để trả `503` nhanh khi mất Redis); dùng `secrets.compare_digest` trả đúng `401` (thay vì `403`/`422`); tách logger `agent` (`propagate = False`) với `JsonFormatter` để không lẫn log text của Uvicorn; cấu hình `render.yaml` dùng `generateValue: true` không lộ secret. Chạy kiểm chứng `python check_production_ready.py` đạt `12/12` (`43/43 checks passed`, image `69 MB`, `docker stop` thoát `0` sau `1.0s`) và kiểm tra `git diff` đảm bảo `check_production_ready.py` không bị chạm vào. |
+| **Part 7 Bước 1 (CP7)** | Hỏi cách chọn bucket hợp lý cho Histogram `agent_question_length_chars` và cách viết GitHub Actions workflow dùng `run_eval.py` làm quality gate. | Gợi ý dải bucket theo `max_length=2000` ký tự của `AskRequest` và mẫu workflow bật `app.py` chạy nền với `MOCK_ERROR_RATE=0` để tránh lỗi upstream ngẫu nhiên làm nhiễu kết quả chấm kiến thức. | Chạy đủ 7 kịch bản `load_test.py` trước rồi mới chạy `eval_v1.json` và `eval_v2.json` trên KB gốc (để lưu đúng baseline `91.3%` với 2 câu lỗi `security-02`, `scaling-03`). Chọn từ khóa trigger hẹp (`["jwt"]` và `["hpa", "kubernetes", "autoscal"]`) khi thêm vào `KNOWLEDGE_BASE` để không chiếm nhầm câu `basic-01` (vốn dựa vào fallback `V1_RESPONSES["deploy"]`), đồng bộ sang cả `production/utils/mock_llm.py`, khởi động lại `v2` đạt `23/23 (100%)` không regression và đối chiếu khớp 100% từng con số JSON vào `BENCHMARK_REPORT.md`. |
+| **Part 7 Bước 2 (CP8)** | Hỏi nguyên nhân các request Locust đầu tiên bị lỗi `502` và cách giải thích hiện tượng `p95` không giảm mạnh khi scale từ 1 lên 3 instance trên cùng một máy Docker. | Gợi ý kiểm tra log khởi động của container `agent` và phân tích định luật Little kết hợp độ trễ I/O phía LLM upstream. | Kiểm tra `docker compose logs agent` phát hiện `production/Dockerfile` tạo user `useradd -d /app` nhưng copy gói `--user` vào `/home/agent/.local` mà thiếu `ENV PYTHONUSERBASE=/home/agent/.local` khiến `uvicorn` báo `ModuleNotFoundError`; sau khi bổ sung `PYTHONUSERBASE` và `chown`, stack chạy sạch sẽ. Tự chạy lại toàn bộ Locust headless (`scale_1`, `scale_3`), `promtool test rules`, đối chiếu `trace_id` giữa Jaeger với dòng log JSON thực tế, kích hoạt đồng thời cả 4 alert `FIRING` và dọn sạch stack bằng `down -v`. |
